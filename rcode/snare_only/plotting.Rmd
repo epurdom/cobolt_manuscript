@@ -1,0 +1,198 @@
+---
+title: "SNARE-seq Only Analysis"
+output: 
+    html_document:
+        toc: true
+        toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.width = 16, fig.height = 10)
+# Rscript -e "rmarkdown::render('20201207_method_comparison_mop.Rmd')"
+```
+
+```{r, message=FALSE}
+library(mclust)
+library(clusterExperiment)
+library(uwot)
+library(Seurat)
+library(clusterExperiment)
+library(reshape2)
+library(ggplot2)
+library(RANN)
+library(cluster)
+library(cisTopic)
+library(Rtsne)
+library(densityClust)
+library(cowplot)
+library(cluster)
+```
+
+```{r seurat}
+dataset = "snare"
+datatype = 'rna'
+dat_dir <- "../../output/method_comparison/"
+load(file.path(dat_dir, paste0(dataset, "_", datatype, ".RData")), verbose = TRUE)
+
+seurat_res = cbind(as.data.frame(obj@reductions$umap@cell.embeddings), 
+                   seurat = as.character(obj$seurat_clusters))
+seurat_res$seurat = as.character(as.numeric(seurat_res$seurat) + 1)
+colnames(seurat_res)[1:2] = c("Seurat_UMAP1", "Seurat_UMAP2")
+```
+
+```{r cisTopic}
+load("../../output/method_comparison/snare_cisTopic.RData", verbose = TRUE)
+
+# ========= the following code follows the cisTopic Vignette
+set.seed(0)
+cellassign <- modelMatSelection(cisTopicObject, 'cell', 'Probability')
+DR <- Rtsne(t(cellassign), pca=F)
+DRdist <- dist(DR$Y)
+# DRdist <- dist(cisTopicObject@dr[['cell']]$Umap)
+dclust <- densityClust(DRdist, gaussian=T)
+dclust <- findClusters(dclust, rho = 50, delta = 2.5)
+# Add cluster information
+densityClust <- dclust$clusters
+names(densityClust) <- cisTopicObject@cell.names
+```
+
+```{r, message=FALSE}
+output_dir = "../../output/snare_only"
+file_name = "Ad_30_2_10True_True_train_latent.csv"
+print(file_name)
+df = read.csv(file.path(output_dir, file_name), header = FALSE)
+barcode = read.table(file.path(output_dir, "train_barcodes.txt"), stringsAsFactors = FALSE)$V1
+n_dim = ncol(df)
+rownames(df) = barcode
+
+rna <- CreateSeuratObject(
+  counts = round(exp(t(df[, 1:(n_dim-1)]))), # place holder, we will not use this
+  assay = "RNA", project = 'RNA')
+rna@reductions$ours = CreateDimReducObject(
+  embeddings = as.matrix(df[, 1:(n_dim-1)]), key = "DIM_", assay = "RNA")
+rna <- RunUMAP(rna, reduction = "ours", dims = 1:(n_dim-1))
+
+umap_res <- rna@reductions$umap@cell.embeddings
+df <- cbind(df, umap_res, seurat_res[barcode, ])
+```
+
+```{r}
+cisTopic_umap <- as.data.frame(cisTopicObject@dr[['cell']]$Umap)
+colnames(cisTopic_umap) = c("cisTopic_UMAP1", "cisTopic_UMAP2")
+df = cbind(df, cisTopic_umap[rownames(df), ])
+df$cisTopic = as.character(densityClust[rownames(df)])
+```
+
+```{r, fig.width=16, fig.height=10}
+p_list = list()
+mean_sil_list = list()
+for (clus in c("cisTopic", "seurat")){
+  for (reduc in c("Seurat_UMAP", "cisTopic_UMAP", "UMAP_")){
+    p_list[[paste(reduc, clus)]] = ggplot(df) + 
+      geom_point(aes_string(x = paste0(reduc, 1), y = paste0(reduc, 2), color = clus), size = 0.1) + 
+      theme_bw() + guides(colour = guide_legend(override.aes = list(size=5))) +
+      scale_color_manual(values = clusterExperiment::bigPalette) + 
+      theme(legend.position = "none", 
+            axis.ticks = element_blank(), 
+            axis.text = element_blank(),
+            panel.grid = element_blank(), 
+            axis.title = element_blank(), 
+            plot.margin = unit(c(1,-0.05,1,-0.05)*0.25, "cm"),
+            plot.title = element_text(size=15))
+  }
+}
+p_list[[1]] = p_list[[1]] + ggtitle("Gene expression UMAP, Seurat") + ylab("Cluster on chromatin accessibility")
+p_list[[2]] = p_list[[2]] + ggtitle("Chromatin accessibility UMAP, cisTopic")
+p_list[[3]] = p_list[[3]] + ggtitle("Joint UMAP, Cobolt")
+
+p_list[[4]] = p_list[[4]] + ggtitle("Gene expression UMAP, Seurat") + ylab("Cluster on chromatin accessibility")
+p_list[[5]] = p_list[[5]] + ggtitle("Chromatin accessibility UMAP, cisTopic")
+p_list[[6]] = p_list[[6]] + ggtitle("Joint UMAP, Cobolt")
+```
+
+```{r}
+mean_sil_list = list()
+for (reduc in c("cisTopic_UMAP", "UMAP_", "Seurat_UMAP")){
+  for (clus in c("cisTopic", "seurat")){
+    dist_umap = dist(df[, c(paste0(reduc, "1"), paste0(reduc, "2"))])
+    sil = silhouette(as.integer(df[, clus]), dist_umap)
+    mean_sil = aggregate(sil[, "sil_width"], by = list(cluster = sil[, "cluster"]), mean)
+    mean_sil = as.data.frame(mean_sil)
+    median_sil = aggregate(sil[, "sil_width"], by = list(cluster = sil[, "cluster"]), median)[, 2]
+    sum_sil = aggregate(sil[, "sil_width"], by = list(cluster = sil[, "cluster"]), length)[, 2]
+    mean_sil$median = median_sil
+    mean_sil$count = sum_sil
+    mean_sil$reduc = reduc
+    mean_sil$clus = clus
+    mean_sil_list[[paste(reduc, clus)]] = mean_sil
+  }
+}
+mean_sil = do.call("rbind", mean_sil_list)
+```
+
+```{r, fig.width=6, fig.height=6}
+mean_sil$reduc = factor(mean_sil$reduc, levels = c("Seurat_UMAP", "cisTopic_UMAP", "UMAP_"))
+sil_cistopic = ggplot(mean_sil[mean_sil$clus == "cisTopic", ]) + 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray70") + 
+  geom_point(aes(x = reduc, y = median, color = as.character(cluster)), size = 5, alpha = 0.75) + 
+  scale_color_manual(values = clusterExperiment::bigPalette) +
+  theme_bw() + 
+  ylab("Cluster median silhouette width") + xlab("Reduction") + 
+  scale_x_discrete(labels= c("Seurat", "cisTopic", "Cobolt")) +
+  theme(legend.position = "none", 
+        panel.grid = element_blank())
+sil_seurat= ggplot(mean_sil[mean_sil$clus == "seurat", ]) + 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray70") + 
+  geom_point(aes(x = reduc, y = median, color = as.character(cluster)), size = 5, alpha = 0.75) + 
+  scale_color_manual(values = clusterExperiment::bigPalette) +
+  theme_bw() + 
+  ylab("Cluster median silhouette width") + xlab("Reduction") + 
+  scale_x_discrete(labels= c("Seurat", "cisTopic", "Cobolt")) +
+  theme(legend.position = "none", 
+        panel.grid = element_blank())
+```
+
+
+```{r, fig.width=14, fig.height=10}
+
+p1 = plot_grid(plotlist = c(p_list[4:6], list(sil_seurat)), 
+          nrow = 1, align = "h", rel_widths = c(1, 1, 1, 0.6))
+p2 = plot_grid(plotlist = c(p_list[1:3], list(sil_cistopic)), 
+          nrow = 1, align = "h", rel_widths = c(1, 1, 1, 0.6))
+
+plot_grid(
+  ggdraw() + draw_label("A) Gene expression clusters", 
+                        size = 18, x = 0, y = 1, hjust = 0, vjust = 1, fontface = "bold"),
+  p1, 
+  ggdraw() + draw_label("B) Chromatin accessibility clusters", 
+                        size = 18, x = 0, y = 1, hjust = 0, vjust = 1, fontface = "bold"),
+  p2, ncol = 1, rel_heights = c(0.06, 1, 0.06, 1))
+```
+
+```{r, fig.width=13, fig.height=9}
+p1 = plot_grid(plotlist = c(p_list[4:6]), 
+          nrow = 1, align = "h", rel_widths = c(1, 1, 1, 0.6))
+p2 = plot_grid(plotlist = c(p_list[1:3]), 
+          nrow = 1, align = "h", rel_widths = c(1, 1, 1, 0.6))
+
+plot_grid(
+  ggdraw() + draw_label("A) Gene expression clusters", 
+                        size = 18, x = 0, y = 1, hjust = 0, vjust = 1, fontface = "bold"),
+  p1, 
+  ggdraw() + draw_label("B) Chromatin accessibility clusters", 
+                        size = 18, x = 0, y = 1, hjust = 0, vjust = 1, fontface = "bold"),
+  p2, ncol = 1, rel_heights = c(0.06, 1, 0.06, 1))
+```
+```{r, fig.width=6.4, fig.height=4.5, out.width='60%'}
+plot_grid(plot_grid(
+  ggdraw() + 
+    draw_label("A) Gene expression clusters", size = 12, x = 0, y = 1, 
+               hjust = -0.22, vjust = 1.5), 
+  sil_seurat + ylim(-0.7, 1), rel_heights = c(0.05, 1), ncol = 1), 
+          plot_grid(
+  ggdraw() + 
+    draw_label("B) Chromatin accessibility clusters", size = 12, x = 0, y = 1, 
+               hjust = -0.22, vjust = 1.5), 
+  sil_cistopic + ylim(-0.7, 1), rel_heights = c(0.05, 1), ncol = 1))
+```
+

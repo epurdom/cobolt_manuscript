@@ -88,7 +88,7 @@ while current_run < total_run:
     annealing_epochs = 30
     alpha = 2
     hidden_dims = [128]
-    file_sub = dataset + str(learning_rate) + '_' + str(annealing_epochs) \
+    file_sub = dataset + '_' + str(annealing_epochs) \
                + '_' +  str(alpha) + '_' + str(n_latent)
     model = VAE(in_channels=dt.get_feature_shape(), hidden_dims = hidden_dims, latent_dim=n_latent).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
