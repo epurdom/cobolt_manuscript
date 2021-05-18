@@ -11,5 +11,5 @@ This directory contains scripts for the `Cobolt` model inference.
 -   `multiomicDataset.py` contains a pytorch dataset class for multiomic datasets.
 -   `run_snare.py`  runs the analysis for SNARE-seq data.
 -   `run_three_datasets.py` runs `Cobolt` for integrating three datasets (SNARE-seq, MOp scRNA-seq, and MOp scATAC-seq)
--   `run_test_training_split.py` perform the train-test split analysis for method comparison.
+-   `run_train_test_split.py` perform the train-test split analysis for method comparison.
 
