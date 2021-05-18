@@ -24,7 +24,7 @@ dt.to_csv(os.path.join(dir, s + ".fragments.sort.bed"),
           header=False, sep="\t", index=False)
 
 
-# =================== from terminal
+# =================== bash 
 # sort, compress, and index
 # # sort -k1,1 -k2,2n CEMBA171206_3C.fragments.bed | uniq -c > CEMBA171206_3C.fragments.sort.bed
 # bgzip -@ 8 CEMBA171206_3C.fragments.sort.bed

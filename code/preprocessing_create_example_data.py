@@ -10,7 +10,6 @@ import pyranges as pr
 snare_seq_files = {
     'dir': '../data/SNAREseq/data/',
     'AdBrainCortex_prefix': 'GSE126074_AdBrainCortex_SNAREseq',
-    'P0_BrainCortex_prefix': 'GSE126074_P0_BrainCortex_SNAREseq',
     'rna': '_cDNA',
     'atac': '_chromatin',
     'atac_gene': '_chromgene',
@@ -24,8 +23,6 @@ snare_seq_files = {
 def _get_file_name(dataset, omic, file):
     if dataset == 'Ad':
         prefix = snare_seq_files['AdBrainCortex_prefix']
-    elif dataset == 'P0':
-        prefix = snare_seq_files['P0_BrainCortex_prefix']
     else:
         raise ValueError("dataset not valid")
     if omic not in ['rna', 'atac', 'atac_gene']:

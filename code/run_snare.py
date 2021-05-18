@@ -1,8 +1,6 @@
 import numpy as np
 from model import VAE
 from load_data import load_snare_seq
-import matplotlib.pyplot as plt
-import seaborn as sns
 import torch
 import os
 from torch.utils.data import DataLoader, Subset
@@ -46,11 +44,16 @@ test_idx = permuted_idx[int(n_samples*1):]
 
 train_barcodes = barcodes[train_idx]
 test_barcodes = barcodes[test_idx]
-np.savetxt("../output/train_barcodes.txt", train_barcodes, fmt="%s")
-np.savetxt("../output/test_barcodes.txt", test_barcodes, fmt="%s")
 
-np.savetxt("../output/genes.txt", features['rna'], fmt="%s")
-np.savetxt("../output/peaks.txt", features['atac'], fmt="%s")
+output_dir = os.path.join("../output/", "snare_only")
+if not os.path.exists(output_dir):
+    os.mkdir(output_dir)
+
+np.savetxt(os.path.join(output_dir, "train_barcodes.txt"), train_barcodes, fmt="%s")
+np.savetxt(os.path.join(output_dir, "test_barcodes.txt"), test_barcodes, fmt="%s")
+
+np.savetxt(os.path.join(output_dir, "genes.txt"), features['rna'], fmt="%s")
+np.savetxt(os.path.join(output_dir, "peaks.txt"), features['atac'], fmt="%s")
 
 
 dt = CoboltDataset(X=list(counts.values()),
@@ -124,7 +127,6 @@ while current_run < total_run:
         # print([x.mean() / 128 for x in history['loss']])
 
     with torch.no_grad():
-        model.plot_beta(path='../output/' + file_sub)
         for test_elbo_comb in [[True, False], [False, True], [True, True]]:
             for dt_str, dl in zip(['train'], [train_loader, test_loader]):
                 topic_prop_test = []
@@ -132,7 +134,7 @@ while current_run < total_run:
                     topic_prop_test += [model.get_latent([y.to(device) for y in x], elbo_bool=test_elbo_comb)]
                 res = np.concatenate(topic_prop_test)
                 np.savetxt(os.path.join(
-                    "../output/",
+                    output_dir,
                     file_sub + "_".join([str(x) for x in test_elbo_comb]) + \
                     "_" + dt_str + "_latent.csv"),
                     res, delimiter=",")

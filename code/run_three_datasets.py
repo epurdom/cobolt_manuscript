@@ -2,7 +2,6 @@ import numpy as np
 import os
 from scipy import sparse
 import pandas as pd
-import random
 from model import VAE
 from multiomicDataset import collate_wrapper, MultiomicDataset, shuffle_dataloaders
 from load_data import load_merged_remapped
@@ -21,7 +20,7 @@ torch.cuda.empty_cache()
 # P: partial filtering
 # T: filter to annotated cells
 is_filter = "F"
-output_dir = "../output/20210210_" + is_filter + "/"
+output_dir = os.path.join("../output/three_datasets", is_filter)
 if not os.path.exists(output_dir):
     os.mkdir(output_dir)
 

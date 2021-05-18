@@ -1,12 +1,9 @@
 import numpy as np
 import os
 from scipy import sparse
-import pandas as pd
-import random
 from lda_prod_joint_dt_specific import VAE
 from load_data import load_merged_remapped, load_snare_seq, load_snare_seq_genes, load_snare_seq_remapped
 from multiomicDataset import collate_wrapper, MultiomicDataset, shuffle_dataloaders
-import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader, Subset, SubsetRandomSampler
 torch.cuda.empty_cache()
@@ -15,12 +12,7 @@ torch.cuda.empty_cache()
 # ==================================== read data
 # ====================================
 
-week_dir = "../output/output_20210309/"
-if not os.path.exists(week_dir):
-    os.mkdir(week_dir)
-TRAINING_PROP = 0.2
-print("======================= PARAM ", TRAINING_PROP)
-output_dir = week_dir + str(TRAINING_PROP) + "/"
+output_dir = "../output/train_test_split/"
 if not os.path.exists(output_dir):
     os.mkdir(output_dir)
 
@@ -29,6 +21,7 @@ counts, features, barcodes = load_snare_seq("Ad")
 # counts, features, barcodes = load_snare_seq_genes("Ad")
 n_samples = len(barcodes)
 np.random.seed(0)
+TRAINING_PROP = 0.2
 permuted_idx = np.random.permutation(n_samples)
 train_idx = permuted_idx[:int(n_samples*TRAINING_PROP)]
 test_idx = permuted_idx[int(n_samples*TRAINING_PROP):]
