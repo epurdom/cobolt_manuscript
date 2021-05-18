@@ -1,0 +1,618 @@
+---
+title: "All Figures"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, dpi = 300)
+```
+
+```{r lib, message=FALSE}
+library(cowplot)
+library(ggplot2)
+library(NMF)
+library(viridis)
+library(gridGraphics)
+library(compiler)
+library(RColorBrewer)
+library(clusterExperiment)
+library(reshape2)
+```
+
+```{r}
+dir = "../output/20210204_all_figures/"
+```
+
+# Train test split
+
+```{r, fig.width=9, fig.height=3.5}
+load(file.path(dir, "test_train_0.2.RData"), verbose = TRUE)
+
+prow = plot_grid(
+  mrna_plot[[1]] + 
+    theme(legend.position="none") + 
+    ggtitle("Gene expression as query") + 
+    theme_bw() + 
+    scale_color_manual(values = clusterExperiment::bigPalette,
+                       labels = c("Cobolt-gene", "Cobolt-peak", "LIGER", "Signac")) + 
+    theme(legend.position = "none", plot.title = element_text(hjust = 0.5), 
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank()), 
+  atac_plot[[1]] + 
+    theme(legend.position="none") + 
+    ggtitle("Chromatin accessibility as query") + 
+    theme_bw() + 
+    scale_color_manual(values = clusterExperiment::bigPalette,
+                       labels = c("Cobolt-gene", "Cobolt-peak", "LIGER", "Signac")) +
+    theme(legend.position = "none", plot.title = element_text(hjust = 0.5), 
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank()), 
+  align = 'h')
+legend = get_legend(
+  mrna_plot[[1]] + 
+    scale_color_manual(values = clusterExperiment::bigPalette,
+                       labels = c("Cobolt-gene", "Cobolt-peak", "LIGER", "Signac")) +
+    labs(color='Method') + theme(legend.box.margin = margin(0, 6, 0, 6))
+)
+plot_grid(prow, legend, rel_widths = c(3, .6))
+```
+
+# Overview (with SNARE-seq)
+
+```{r, fig.width=16, fig.height=6}
+umap_theme = theme_bw()+
+            theme(axis.title.x=element_blank(), axis.title.y=element_blank(),
+                  axis.text.x=element_blank(), axis.text.y=element_blank(),
+                  axis.ticks.x=element_blank(), axis.ticks.y=element_blank(),
+                  panel.grid.major = element_blank(),
+                  panel.grid.minor = element_blank(),
+                  axis.title=element_text(size=15),
+                  legend.text=element_text(size=11),
+                  legend.title=element_text(size=11))
+
+cols = sapply(c("royalblue4", "red4", "gold3"), function(x){
+  colfunc <- colorRampPalette(c(x, "white"))
+  colfunc(10)[4]
+})
+names(cols) = NULL
+
+load(file.path(dir, "overview.RData"))
+plot_grid(p1 + ggtitle("") + xlab("UMAP 1") + ylab("UMAP 2") + umap_theme +
+            scale_color_manual(values = cols), 
+          p2 + ggtitle("") + xlab("UMAP 1") + ylab("UMAP 2") + umap_theme,
+          labels = c("A", "B"), label_size = 30, vjust = 1, hjust = 0, rel_widths = c(1, 0.93))
+```
+
+# Minimum filter (~97% mRNA, ~80% ATAC) 
+
+```{r, fig.width=16, fig.height=16, results='asis'}
+plot_method = function(method, legend = FALSE, plot_mat = TRUE, plot_by_dt = TRUE){
+  plot_heatmap = function(){
+    aheatmap(mat, Rowv = NA, Colv = NA, breaks = seq(0, 1, 0.02), 
+               color = c("#FFFFFF", rev(viridis(n = 10))), legend = legend, labCol = labCol)
+  }
+  title_method = c("LIGER", "Signac", "Cobolt           ")
+  names(title_method) = c("liger", "signac", "cobolt")
+  title <- ggdraw() + draw_label(title_method[method], size = 20)
+  for ( i in 1:2 ){
+    p_list[[i]] = p_list[[i]] + umap_theme +
+      ggtitle("")
+    if (i == 2){
+      p_list[[i]] = p_list[[i]] + umap_theme + guides(fill=guide_legend(title="Celltype"))
+    }
+  }
+  if (!legend){
+    for ( i in 1:2 ){
+      p_list[[i]] = p_list[[i]] + umap_theme + theme(legend.position="none")
+    }
+  }
+  if (method == "liger"){
+    labels = c("", "A", "B", "C")
+  } else {
+    labels = c("", "", "", "")
+  }
+  if (plot_mat & plot_by_dt){
+    p = plot_grid(
+      title, p_list[[1]], p_list[[2]], NULL,grid::grid.grabExpr(plot_heatmap()),
+      rel_heights = c(0.1, 1, 1, 0.07, 0.93), ncol = 1, #scale = c(1, 1, 1, 0.9),
+      labels = labels, label_size = 30, hjust = 1.2
+    )
+  } else if (plot_by_dt) {
+    p = plot_grid(
+      title, p_list[[1]], p_list[[2]],
+      rel_heights = c(0.1, 1, 1), ncol = 1, #scale = c(1, 1, 1, 0.9),
+      labels = labels, label_size = 30, hjust = 1.2
+    )
+  } else {
+    if (method == "signac"){
+      labels = c("", "B", "")
+    } else if (method == "cobolt"){
+      labels = c("", "C", "")
+    } else if (method == "liger"){
+      labels = c("", "A")
+    }
+    p = plot_grid(
+      title, p_list[[2]],
+      rel_heights = c(0.07, 1), ncol = 1, #scale = c(1, 1, 1, 0.9),
+      labels = labels, label_size = 30, hjust = -0.3, vjust = 0.3
+    )
+  }
+  return(p)
+}
+```
+
+```{r, fig.width=16, fig.height=20, results='asis'}
+plot_method_both = function(method, legend = FALSE, plot_umap = TRUE, remove_B = FALSE){
+  plot_heatmap = function(mat){
+    aheatmap(mat, Rowv = NA, Colv = NA, breaks = seq(0, 1, 0.02), 
+               color = c("#FFFFFF", rev(viridis(n = 10))), legend = legend, labCol = labCol,
+             border_color = "gray90")
+  }
+  title_method = c("LIGER", "Signac", "Cobolt                 ")
+  names(title_method) = c("liger", "signac", "cobolt")
+  title <- ggdraw() + draw_label(title_method[method], size = 20)
+  for ( i in 1:2 ){
+    p_list[[i]] = p_list[[i]] + umap_theme +
+      ggtitle("")
+  }
+  if (!legend){
+    for ( i in 1:2 ){
+      p_list[[i]] = p_list[[i]] + umap_theme + theme(legend.position="none")
+    }
+  }
+  if (method == "liger"){
+    labels = c("", "A", "B", "C", "", "D", "")
+  } else {
+    labels = c("", "", "", "", "", "", "")
+  }
+  if (plot_umap & !remove_B){
+    p = plot_grid(
+      title, p_list[[1]], p_list[[2]], 
+      NULL,
+      grid::grid.grabExpr(plot_heatmap(mat_list[["row"]])),
+      NULL,
+      grid::grid.grabExpr(plot_heatmap(mat_list[["col"]])),
+      rel_heights = c(0.07, 1, 1, 0.07, 0.93, 0.07, 0.93), ncol = 1, 
+      labels = labels, label_size = 30, hjust = 1.2#, scale = c(1, 1, 1, 1, 0.9)
+    )
+  } else if (remove_B){
+    blank_box = ifelse(method == "cobolt", 0.22, 0)
+    p = plot_grid(
+      title, p_list[[1]], 
+      NULL,
+      plot_grid(grid::grid.grabExpr(plot_heatmap(mat_list[["row"]])), NULL, nrow = 1, rel_widths = c(1, blank_box)),
+      NULL,
+      plot_grid(grid::grid.grabExpr(plot_heatmap(mat_list[["col"]])), NULL, nrow = 1, rel_widths = c(1, blank_box)),
+      rel_heights = c(0.07, 1, 0.07, 0.83, 0.07, 0.83), ncol = 1, 
+      labels = c(labels[1], labels[2], labels[3], "", labels[4]), label_size = 30, hjust = 1.2#, scale = c(1, 1, 1, 1, 0.9)
+    )
+  } else {
+    p = plot_grid(
+      title, 
+      grid::grid.grabExpr(plot_heatmap(mat_list[["row"]])),
+      NULL,
+      grid::grid.grabExpr(plot_heatmap(mat_list[["col"]])),
+      rel_heights = c(0.07, 0.93, 0.07, 0.93), ncol = 1, 
+      labels = c(labels[1], labels[2], "", labels[3]), label_size = 30, hjust = 1.2#, scale = c(1, 1, 1, 1, 0.9)
+    )
+  }
+  return(p)
+}
+
+conc = list("row" = list(), "col" = list())
+
+
+load(file.path(dir, "liger_30_M_umap.RData"))
+mat_list = list()
+for (scale_by in c("row", "col")){
+  load(file.path(dir, paste0("liger_30_M_17_", scale_by, "_mat.RData")))
+  mat_list[[scale_by]] = mat
+  mg = ifelse(scale_by == "row", 1, 2)
+  conc[[scale_by]][["liger"]] = apply(mat, mg, max)
+}
+
+p_liger = plot_method_both("liger")
+
+load(file.path(dir, "signac_30_M_umap.RData"))
+mat_list = list()
+for (scale_by in c("row", "col")){
+  load(file.path(dir, paste0("signac_30_M_17_", scale_by, "_mat.RData")))
+  mat_list[[scale_by]] = mat
+  mg = ifelse(scale_by == "row", 1, 2)
+  conc[[scale_by]][["signac"]] = apply(mat, mg, max)
+}
+p2 = plot_method_both("signac")
+
+load(file.path(dir, "xgboost_30_M_umap.RData"))
+  load(file.path(dir, "cobolt_umap_replot.RData"))
+mat_list = list()
+for (scale_by in c("row", "col")){
+  load(file.path(dir, paste0("xgboost_30_M_17_", scale_by, "_mat.RData")))
+  mat_list[[scale_by]] = mat
+  mg = ifelse(scale_by == "row", 1, 2)
+  conc[[scale_by]][["cobolt"]] = apply(mat, mg, max)
+}
+p3 = plot_method_both("cobolt", legend = TRUE)
+p_final = plot_grid(NULL, p_liger, p2, p3, nrow = 1, rel_widths = c(0.1, 1, 1, 1.4))
+print(p_final)
+```
+
+```{r, fig.width=7, fig.height=5, out.width='75%'}
+conc_mat = list()
+p_box = list()
+for (scale_by in c("row", "col")){
+  conc_tmp = do.call("rbind", conc[[scale_by]])
+  conc_tmp = conc_tmp[, colnames(conc_tmp) != "Unannotated"]
+  conc_tmp = melt(conc_tmp)
+  colnames(conc_tmp)[1:2] = c("Method", "Cluster")
+  conc_mat[[scale_by]] = conc_tmp
+  p_box[[scale_by]] = ggplot(conc_mat[[scale_by]]) + 
+    geom_boxplot(aes(x = Method, y = value, fill = Method)) + 
+    theme_classic() + 
+    scale_fill_manual(values = clusterExperiment::bigPalette[2:4]) + 
+    ylab("Concentration") + 
+    theme(legend.position = "none")
+}
+
+cell_counts = read.table("cell_counts.txt", stringsAsFactors = FALSE, sep = "\t")
+cell_counts = sort(rowSums(cell_counts), decreasing = TRUE)[-1]
+
+conc_mat[["row"]]$Cluster = factor(as.character(conc_mat[["row"]]$Cluster), 
+                                   levels = names(cell_counts))
+title_method = c("LIGER", "Signac", "Cobolt")
+names(title_method) = c("liger", "signac", "cobolt")
+conc_mat[["row"]]$Method = title_method[conc_mat[["row"]]$Method]
+p_bar = ggplot(conc_mat[["row"]]) + 
+  geom_bar(aes(x = Cluster, y = value, fill = Method), #color = "black", size = 0.1,
+           position="dodge", stat="identity", width = 0.75, alpha = 0.6) + 
+  theme_bw() + 
+  scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+  scale_fill_manual(values = clusterExperiment::bigPalette[5:7]) + 
+  ylab(" Concentration")
+p_final = plot_grid(
+  p_bar, 
+  plot_grid(p_box[["row"]], p_box[["col"]], 
+            nrow = 1, labels = c("B", "C"), hjust = 0, vjust = 1), 
+  ncol = 1, rel_widths = c(1), labels = c("A", ""), hjust = 0, vjust = 1)
+p_final
+```
+
+## Final Version
+
+```{r, fig.width=16, fig.height=12, results='asis'}
+for (scale_by in c("row")){
+  load(file.path(dir, "liger_30_M_umap.RData"))
+  load(file.path(dir, paste0("liger_30_M_17_", scale_by, "_mat.RData")))
+  p_liger = plot_method("liger", plot_mat=FALSE, plot_by_dt = FALSE)
+  load(file.path(dir, "signac_30_M_umap.RData"))
+  load(file.path(dir, paste0("signac_30_M_17_", scale_by, "_mat.RData")))
+  p2 = plot_method("signac", plot_mat=FALSE, plot_by_dt = FALSE)
+  load(file.path(dir, "xgboost_30_M_umap.RData"))
+  load(file.path(dir, "cobolt_umap_replot.RData"))
+  load(file.path(dir, paste0("xgboost_30_M_17_", scale_by, "_mat.RData")))
+  p3 = plot_method("cobolt", legend = TRUE, plot_mat=FALSE, plot_by_dt = FALSE)
+  p_all = plot_grid(NULL, p_liger, p2, p3, nrow = 1, rel_widths = c(0.1, 1, 1, 1.3))
+  cat("\n")
+  cat("\n")
+}
+p_final = plot_grid(
+  p_all, 
+  p_bar + theme(text = element_text(size=20), 
+                panel.grid.major = element_blank(),
+                panel.grid.minor = element_blank()), 
+  ncol = 1, rel_heights = c(1, 1), labels = c("", "D"), scale = c(1, 0.95),
+  hjust = -1.8, vjust = 1, label_size = 30)
+p_final
+```
+
+```{r, fig.width=16, fig.height=16, results='asis'}
+
+load(file.path(dir, "liger_30_M_umap.RData"))
+mat_list = list()
+for (scale_by in c("row", "col")){
+  load(file.path(dir, paste0("liger_30_M_17_", scale_by, "_mat.RData")))
+  mat_list[[scale_by]] = mat
+  mg = ifelse(scale_by == "row", 1, 2)
+  conc[[scale_by]][["liger"]] = apply(mat, mg, max)
+}
+
+p_liger = plot_method_both("liger", remove_B = TRUE)
+
+load(file.path(dir, "signac_30_M_umap.RData"))
+mat_list = list()
+for (scale_by in c("row", "col")){
+  load(file.path(dir, paste0("signac_30_M_17_", scale_by, "_mat.RData")))
+  mat_list[[scale_by]] = mat
+  mg = ifelse(scale_by == "row", 1, 2)
+  conc[[scale_by]][["signac"]] = apply(mat, mg, max)
+}
+p2 = plot_method_both("signac", remove_B = TRUE)
+
+load(file.path(dir, "xgboost_30_M_umap.RData"))
+  load(file.path(dir, "cobolt_umap_replot.RData"))
+mat_list = list()
+for (scale_by in c("row", "col")){
+  load(file.path(dir, paste0("xgboost_30_M_17_", scale_by, "_mat.RData")))
+  mat_list[[scale_by]] = mat
+  mg = ifelse(scale_by == "row", 1, 2)
+  conc[[scale_by]][["cobolt"]] = apply(mat, mg, max)
+}
+p3 = plot_method_both("cobolt", legend = TRUE, remove_B = TRUE)
+p_final = plot_grid(NULL, p_liger, p2, p3, nrow = 1, rel_widths = c(0.1, 1, 1, 1.4))
+p_final
+
+```
+
+
+
+# Cluster marker gene expression
+
+```{r,fig.width=9, fig.height=7}
+load(file.path(dir, "xgboost_30_M_25_row_mat_subset.RData"))
+plot_heatmap = function(mat){
+      plot_df = melt(mat)
+      plot_df = as.data.frame(plot_df)
+      plot_df$Var2 = as.character(plot_df$Var2)
+      plot_df$Var2[!(plot_df$Var2 %in% cluster_to_plot)] = "Others"
+      p = ggplot(plot_df) + 
+        geom_bar(aes(x = Var1, y = value, fill = Var2), alpha = 0.6, width = 0.6, #color = "black", size = 0.3, 
+                 position = "fill", stat = "identity") +
+        theme_bw() +
+        theme(panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank())+
+        scale_fill_manual(values = clusterExperiment::bigPalette[5:8]) +
+        guides(fill=guide_legend(title="Cluster")) +
+        xlab("Annotation") + 
+        ylab("Proportion")
+      return(p)
+}
+
+cluster_to_plot = c("13", "16")
+
+dt_list = list()
+for (om in c("ATAC", "mRNA")){
+  load(file.path(dir, paste0("25_", om, "_30_mean_expr.RData")))
+  cluster = as.character(cluster)
+  cluster[!(cluster %in% cluster_to_plot)] = "Others"
+  dt = as.data.frame(as.matrix(t(dt)))
+  dt$Cluster = cluster
+  dt = melt(dt)
+  dt$data = om
+  dt_list[[om]] = dt
+}
+dt = do.call("rbind", dt_list)
+
+box_list = list()
+for (g in list(c("Gad1", "Prox1"), c("Lamp5", "Vip"))){
+  box_list[[g[1]]] = ggplot(dt[(dt$Cluster != "Others") & (dt$variable %in% g), ], 
+       aes(x = Cluster, y = value, fill = Cluster)) + 
+  geom_boxplot(width = 1, outlier.shape = NA, alpha = 0.6, width = 0.5) +
+  facet_grid(variable~data, scales = "free") +
+  geom_jitter(position=position_jitter(w = 0.2, h = 0.1), size = 0.1) +
+  scale_fill_manual(values = clusterExperiment::bigPalette[5:7]) + 
+  ylab("Log Expression") +
+  theme_bw()
+}
+```
+
+```{r, fig.width=10,fig.height=5}
+plot_grid(plot_heatmap(mat[, as.character(0:24)]),
+          box_list[[1]] + theme(legend.position = "none",
+                                          panel.grid.major = element_blank(),
+                                          panel.grid.minor = element_blank()), 
+          box_list[[2]] + theme(legend.position = "none",
+                                          panel.grid.major = element_blank(),
+                                          panel.grid.minor = element_blank()), 
+          rel_widths = c(1.23, 1, 1.3), 
+          nrow=1, labels = c("A", "B", "C"), label_size = 18)
+```
+
+
+# Supplementary: Remapped Peaks
+
+```{r, fig.width=9, fig.height=3.5}
+load(file.path(dir, "test_train_0.2.RData"), verbose = TRUE)
+
+prow = plot_grid(
+  mrna_full[[1]] + 
+    theme(legend.position="none") + 
+    ggtitle("Gene expression as query") + 
+    theme_bw() + 
+    scale_color_manual(values = clusterExperiment::bigPalette[c(1, 2, 5, 3, 4)]) + 
+    theme(legend.position = "none", plot.title = element_text(hjust = 0.5), 
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank()), 
+  atac_full[[1]] + 
+    theme(legend.position="none") + 
+    ggtitle("Chromatin accessibility as query") + 
+    theme_bw() + 
+    scale_color_manual(values = clusterExperiment::bigPalette[c(1, 2, 5, 3, 4)]) + 
+    theme(legend.position = "none", plot.title = element_text(hjust = 0.5), 
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank()), 
+  align = 'h')
+legend = get_legend(
+  atac_full[[1]] + 
+    scale_color_manual(values = clusterExperiment::bigPalette[c(1, 2, 5, 3, 4)]) + 
+    labs(color='Method') + theme(legend.box.margin = margin(0, 6, 0, 6))
+)
+plot_grid(prow, legend, rel_widths = c(3, .6))
+```
+
+```{r, fig.width=9, fig.height=3.5}
+load(file.path(dir, "test_train_0.2.RData"))
+
+prow = plot_grid(
+  mrna_supp[[1]] + 
+    theme(legend.position="none") + 
+    ggtitle("Gene expression as query") + 
+    theme_bw() + 
+    theme(legend.position = "none", plot.title = element_text(hjust = 0.5), 
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank()), 
+  atac_supp[[1]] + 
+    theme(legend.position="none") + 
+    ggtitle("Chromatin accessibility as query") + 
+    theme_bw() + 
+    theme(legend.position = "none", plot.title = element_text(hjust = 0.5), 
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank()), 
+  align = 'h')
+legend = get_legend(
+  mrna_supp[[1]] + 
+    scale_color_manual(values = clusterExperiment::bigPalette[1:2],
+                       labels = c("Cobolt-peak", "Cobolt-remapped")) +
+    labs(color='Method') + theme(legend.box.margin = margin(0, 6, 0, 6))
+)
+plot_grid(prow, legend, rel_widths = c(3, .6))
+```
+
+# Supplementary
+
+```{r}
+plot_method_both = function(method, legend = FALSE, plot_umap = TRUE, remove_B = FALSE){
+  plot_heatmap = function(mat){
+    aheatmap(mat, Rowv = NA, Colv = NA, breaks = seq(0, 1, 0.02), 
+               color = c("#FFFFFF", rev(viridis(n = 10))), legend = legend, labCol = labCol,
+             border_color = "gray85")
+  }
+  p = plot_grid(
+      p_list[[2]] + umap_theme + ggtitle(""), 
+      plot_grid(grid::grid.grabExpr(plot_heatmap(mat_list[["row"]])),
+                grid::grid.grabExpr(plot_heatmap(mat_list[["col"]])), nrow = 1),
+      rel_heights = c(0.07, 1, 1, 0.07, 0.93, 0.07, 0.93), ncol = 1, 
+      labels = labels, label_size = 30, hjust = 1.2#, scale = c(1, 1, 1, 1, 0.9)
+    )
+  return(p)
+}
+```
+
+
+```{r, fig.width=12, fig.height=7.5}
+load(file.path(dir, "xgboost_30_F_umap.RData"))
+mat_list = list()
+for (scale_by in c("row", "col")){
+  load(file.path(dir, paste0("xgboost_30_F_17_", scale_by, "_mat.RData")))
+  mat_list[[scale_by]] = mat
+  mg = ifelse(scale_by == "row", 1, 2)
+}
+plot_heatmap = function(mat, legend){
+  aheatmap(mat, Rowv = NA, Colv = NA, breaks = seq(0, 1, 0.02), 
+             color = c("#FFFFFF", rev(viridis(n = 10))), legend = legend, labCol = labCol,
+           border_color = "gray90")
+}
+p = plot_grid(
+    plot_grid(p_list[[2]] + umap_theme + ggtitle(""), NULL, ncol = 1, rel_heights = c(1, 0.05)), 
+    plot_grid(grid::grid.grabExpr(plot_heatmap(mat_list[["row"]], TRUE)),
+              plot_grid(grid::grid.grabExpr(plot_heatmap(mat_list[["col"]], FALSE)), NULL, rel_widths = c(1, 0.175)), 
+              labels = c("B", "C"), label_size = 20, scale = 0.9, nrow = 2, hjust = 0.1, vjust = 1),
+    rel_widths = c(1.3, 1), ncol = 2,
+    labels = c("A"), label_size = 20, vjust = 1#, hjust = 1.2#, scale = c(1, 1, 1, 1, 0.9)
+)
+p
+```
+
+
+
+# Supplementry: Biologist Filter
+
+```{r, fig.width=16, fig.height=20, results='asis'}
+plot_method = function(method, legend = FALSE){
+  plot_heatmap = function(mat){
+    aheatmap(mat, Rowv = NA, Colv = NA, breaks = seq(0, 1, 0.02), 
+               color = c("#FFFFFF", rev(viridis(n = 10))), legend = legend, labCol = labCol)
+  }
+  title <- ggdraw() + draw_label(method, size = 30)
+  for ( i in 1:2 ){
+    p_list[[i]] = p_list[[i]] + 
+      theme(axis.title.x=element_blank(), axis.title.y=element_blank(),
+        axis.text.x=element_blank(), axis.text.y=element_blank(),
+        axis.ticks.x=element_blank(), axis.ticks.y=element_blank()) +
+      ggtitle("")
+  }
+  if (!legend){
+    for ( i in 1:2 ){
+      p_list[[i]] = p_list[[i]] + theme(legend.position="none")
+    }
+  }
+  if (method == "liger"){
+    labels = c("", "A", "B", "C", "", "D", "")
+  } else {
+    labels = c("", "", "", "", "", "", "")
+  }
+  p = plot_grid(
+    title, p_list[[1]], p_list[[2]], 
+    NULL,
+    grid::grid.grabExpr(plot_heatmap(mat_list[["row"]])),
+    NULL,
+    grid::grid.grabExpr(plot_heatmap(mat_list[["col"]])),
+    rel_heights = c(0.2, 1, 1, 0.07, 0.93, 0.07, 0.93), ncol = 1, 
+    labels = labels, label_size = 30, hjust = 1.2#, scale = c(1, 1, 1, 1, 0.9)
+  )
+  return(p)
+}
+
+conc = list("row" = list(), "col" = list())
+
+
+load(file.path(dir, "liger_30_TRUE_umap.RData"))
+mat_list = list()
+for (scale_by in c("row", "col")){
+  load(file.path(dir, paste0("liger_30_TRUE_17_", scale_by, "_mat.RData")))
+  mat_list[[scale_by]] = mat
+  mg = ifelse(scale_by == "row", 1, 2)
+  conc[[scale_by]][["liger"]] = apply(mat, mg, max)
+}
+
+p_liger = plot_method("liger")
+
+load(file.path(dir, "signac_30_TRUE_umap.RData"))
+mat_list = list()
+for (scale_by in c("row", "col")){
+  load(file.path(dir, paste0("signac_30_TRUE_17_", scale_by, "_mat.RData")))
+  mat_list[[scale_by]] = mat
+  mg = ifelse(scale_by == "row", 1, 2)
+  conc[[scale_by]][["signac"]] = apply(mat, mg, max)
+}
+p2 = plot_method("signac")
+
+load(file.path(dir, "xgboost_30_T_umap.RData"))
+mat_list = list()
+for (scale_by in c("row", "col")){
+  load(file.path(dir, paste0("xgboost_30_T_17_", scale_by, "_mat.RData")))
+  mat_list[[scale_by]] = mat
+  mg = ifelse(scale_by == "row", 1, 2)
+  conc[[scale_by]][["cobolt"]] = apply(mat, mg, max)
+}
+p3 = plot_method("cobolt", legend = TRUE)
+p_final = plot_grid(NULL, p_liger, p2, p3, nrow = 1, rel_widths = c(0.1, 1, 1, 1.16))
+print(p_final)
+```
+
+```{r, fig.width=7, fig.height=5, out.width='75%'}
+conc_mat = list()
+p_box = list()
+for (scale_by in c("row", "col")){
+  conc_tmp = do.call("rbind", conc[[scale_by]])
+  conc_tmp = conc_tmp[, colnames(conc_tmp) != "Unannotated"]
+  conc_tmp = melt(conc_tmp)
+  colnames(conc_tmp)[1:2] = c("Method", "Cluster")
+  conc_mat[[scale_by]] = conc_tmp
+  p_box[[scale_by]] = ggplot(conc_mat[[scale_by]]) + 
+    geom_boxplot(aes(x = Method, y = value, fill = Method)) + 
+    theme_classic() + 
+    scale_fill_manual(values = clusterExperiment::bigPalette[2:4]) + 
+    ylab("Concentration") + 
+    theme(legend.position = "none")
+}
+p_bar = ggplot(conc_mat[["row"]]) + 
+  geom_bar(aes(x = Cluster, y = value, fill = Method), 
+           position="dodge", stat="identity", width = 0.75) + 
+  theme_classic() + 
+  scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+  scale_fill_manual(values = clusterExperiment::bigPalette[2:4]) + 
+  ylab(" Concentration")
+p_final = plot_grid(
+  p_bar, 
+  plot_grid(p_box[["row"]], p_box[["col"]], 
+            nrow = 1, labels = c("B", "C"), hjust = 0, vjust = 1), 
+  ncol = 1, rel_widths = c(1), labels = c("A", ""), hjust = 0, vjust = 1)
+p_final
+```
