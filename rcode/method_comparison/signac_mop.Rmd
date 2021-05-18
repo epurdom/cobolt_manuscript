@@ -1,0 +1,261 @@
+---
+title: "Signac"
+output: 
+    html_document:
+        toc: true
+        toc_float: true
+params:
+    k: 30
+    isFilter: "F"
+    weight_reduc_cca: "F"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, out.width='60%')
+# Rscript -e "rmarkdown::render('20201207_signac_mop.Rmd')"
+render_report = function(k, isFilter, weight_reduc_cca) {
+    rmarkdown::render(
+        '20210118_signac_mop_run.Rmd', 
+        params = list(k = k, isFilter = isFilter, weight_reduc_cca = weight_reduc_cca),
+        output_file = paste0('20210118_signac_mop_run_', k, "_", isFilter, "_", weight_reduc_cca, '.html'))
+}
+# reference: https://satijalab.org/seurat/v3.2/atacseq_integration_vignette.html
+```
+
+```{r, message=FALSE}
+library(Signac)
+library(Seurat)
+library(ggplot2)
+library(EnsDb.Mmusculus.v79)
+```
+
+```{r}
+k = as.integer(params$k)
+if (params$isFilter == "T"){
+  isFilter = TRUE  
+} else if (params$isFilter %in% c("P", "F", "M")){
+  isFilter = FALSE  
+}
+weight_reduc_cca = ifelse(params$weight_reduc_cca == "T", TRUE, FALSE)
+
+output_dir = "../../output/method_comparison/"
+if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+```
+
+```{r readData, message=FALSE, warning=FALSE}
+source("../read_mop.R")
+dt = read_mop(read_peaks = TRUE, subsample = 10**8, data_dir = "../../data/", filter = isFilter)
+if (params$isFilter == "P"){
+    isFilter = "P"
+} else if (params$isFilter == "M"){
+    isFilter = "M"
+}
+rna <- CreateSeuratObject(
+    counts = dt$rna, assay = 'RNA', project = 'RNA')
+
+atac_assay <- CreateChromatinAssay(
+  counts = dt$peak, sep = c(":", "-"), genome = "mm10",
+  fragments = file.path("../../data/mini_atlas/ATAC_MOp_EckerRen/snap/CEMBA171206_3C/fragments.sort.tsv.gz"))
+atac <- CreateSeuratObject(
+  counts = atac_assay, assay = 'peaks', project = 'ATAC')
+atac[['ACT']] <- CreateAssayObject(counts = dt$atac)
+
+# extract gene annotations from EnsDb
+annotations <- GetGRangesFromEnsDb(ensdb = EnsDb.Mmusculus.v79)
+# change to UCSC style since the data was mapped to hg19
+seqlevelsStyle(annotations) <- 'UCSC'
+genome(annotations) <- "mm10"
+# add the gene information to the object
+Annotation(atac) <- annotations
+```
+
+Quality control, ATAC, peaks
+
+```{r}
+DefaultAssay(atac) <- "peaks"
+atac <- TSSEnrichment(atac)
+atac <- NucleosomeSignal(atac)
+atac$blacklist_fraction <- FractionCountsInRegion(
+  object = atac, assay = 'peaks', regions = blacklist_mm10
+)
+VlnPlot(
+  object = atac,
+  features = c('blacklist_fraction',
+               'TSS.enrichment', 'nucleosome_signal'),
+  pt.size = 0.1,
+  ncol = 3
+)
+```
+
+
+```{r}
+Idents(atac) <- "all"  # group all cells together, rather than by replicate
+
+if (params$isFilter == "P"){
+  cf = 200
+} else if (params$isFilter == "M"){
+  cf = 100 
+}
+if (params$isFilter %in% c("P", "M")){
+  cell_dir = "../../data/quality_cells/"
+  atac <- subset(
+    x = atac,
+    subset = blacklist_fraction < 0.1 &
+      TSS.enrichment > 2 &
+      TSS.enrichment < 20 &
+      nCount_peaks > cf
+  )
+  a_cells = colnames(atac)
+  write.table(a_cells, file = 
+              file = file.path(cell_dir, paste0("atac_cells", cf, ".txt")),
+              row.names = FALSE, col.names = FALSE, quote = FALSE)
+  atac
+}
+
+```
+
+Process the DNA accessibility data using Signac.
+
+```{r}
+atac <- FindTopFeatures(atac)
+atac <- RunTFIDF(atac)
+atac <- RunSVD(atac)
+atac <- RunUMAP(atac, reduction = 'lsi', dims = 2:30, reduction.name = 'umap.atac') # from vignette
+```
+
+Process gene expression data using Seurat.
+
+```{r}
+rna[["pct.mt"]] = PercentageFeatureSet(rna, pattern = "^mt-")
+VlnPlot(rna, features = c("nCount_RNA", "nFeature_RNA", "pct.mt"), ncol = 3, pt.size = 0.05)
+```
+
+```{r}
+if (params$isFilter == "P"){
+  cf = 1000
+} else if (params$isFilter == "M"){
+  cf = 200
+} 
+if (params$isFilter %in% c("P", "M")){
+  rna = subset(rna, subset = nFeature_RNA > cf & pct.mt < 5)
+  rna_cells = colnames(rna)
+  write.table(rna_cells, 
+              file = file.path(cell_dir, paste0("rna_cells_", cf, ".txt")),
+              row.names = FALSE, col.names = FALSE, quote = FALSE)
+  
+  rna
+}
+```
+
+```{r}
+rna <- FindVariableFeatures(rna)
+rna <- NormalizeData(rna)
+rna <- ScaleData(rna)
+rna <- RunPCA(rna)
+rna <- RunUMAP(rna, dims = 1:30)
+rna <- FindNeighbors(rna)
+```
+
+Process DNA accessibility gene activity using Seurat.
+
+```{r}
+DefaultAssay(atac) <- 'ACT'
+atac <- NormalizeData(
+  object = atac,
+  assay = 'ACT',
+  normalization.method = 'LogNormalize', # default
+  scale.factor = median(atac$nCount_ACT) # from vignette
+)
+atac <- ScaleData(atac)
+```
+
+Run CCA.
+
+```{r}
+transfer.anchors <- FindTransferAnchors(
+  reference = rna,
+  query = atac,
+  dims = 1:k, # default 1:30
+  reduction = 'cca'
+)
+query <- RenameCells(object = atac, new.names = paste0(Cells(x = atac), 
+    "_", "query"))
+reference <- RenameCells(object = rna, new.names = paste0(Cells(x = rna), 
+    "_", "reference"))
+combined.ob <- RunCCA(object1 = reference, object2 = query, 
+                      features = VariableFeatures(reference),
+                      num.cc = k)
+seurat_cca_emb = combined.ob@reductions$cca@cell.embeddings
+```
+
+Clustering RNA and label transfer
+
+```{r, results='asis'}
+rna_clus <- list()
+atac_clus <- list()
+for (resltn in c(seq(0.1, 0.4, 0.05), seq(0.5, 2, 0.1)) ){
+    cat("\n")
+    cat("# ", resltn)
+    cat("\n")
+    rna <- FindClusters(rna, resolution = resltn)
+    rna_clusters = as.character(rna$seurat_clusters)
+    names(rna_clusters) = names(rna$seurat_clusters)
+    if (weight_reduc_cca){
+      predicted.labels <- TransferData(
+          anchorset = transfer.anchors,
+          refdata = rna_clusters,
+          dims = 1:30,
+          weight.reduction = "cca"
+      )
+    } else {
+      predicted.labels <- TransferData(
+          anchorset = transfer.anchors,
+          refdata = as.character(rna$seurat_clusters),
+          dims = 1:30,
+          weight.reduction = atac[['lsi']]
+      )
+    }
+    hist(predicted.labels$prediction.score.max)
+    abline(v = 0.5, col = "red")
+    atac <- AddMetaData(object = atac, metadata = predicted.labels)
+    
+    rna_clus[[as.character(resltn)]] <- rna_clusters
+    atac_clus[[as.character(resltn)]] <- atac$predicted.id
+    
+    p1 <- DimPlot(rna, label = TRUE) + NoLegend() + ggtitle("RNA UMAP")
+    p2 <- DimPlot(atac, group.by = 'predicted.id', reduction = 'umap.atac', label = TRUE) + 
+    NoLegend() + ggtitle("ATAC UMAP (transferred label)")
+    # png(file.path(output_dir, paste0(resltn, ".png")), width = 1000, height = 1000)
+    print(p1 + p2)
+    cat("\n")
+    # dev.off()
+}
+
+rna_umap <- rna@reductions$umap@cell.embeddings
+atac_umap <- atac@reductions$umap.atac@cell.embeddings
+
+save(rna, atac, transfer.anchors, 
+     file = file.path(output_dir, paste0("signac_obj_", k, "_", isFilter, "_", weight_reduc_cca, ".RData")))
+
+save(rna_clus, atac_clus, rna_umap, atac_umap, seurat_cca_emb, predicted.labels, 
+     file = file.path(output_dir, paste0("signac_res_", k, "_", isFilter, "_", weight_reduc_cca, ".RData")))
+```
+
+```{r}
+# ========== co-embedding
+genes.use <- VariableFeatures(rna)
+refdata <- GetAssayData(rna, assay = "RNA", slot = "data")[genes.use, ]
+imputation <- TransferData(
+  anchorset = transfer.anchors, refdata = refdata, weight.reduction = atac[["lsi"]], dims = 1:30)
+atac[["RNA"]] <- imputation
+coembed <- merge(x = rna, y = atac)
+coembed <- ScaleData(coembed, features = genes.use, do.scale = FALSE)
+coembed <- RunPCA(coembed, features = genes.use, verbose = FALSE)
+coembed <- RunUMAP(coembed, dims = 1:30)
+coembed_umap <- coembed@reductions$umap@cell.embeddings
+
+save(coembed_umap,
+     file = file.path(output_dir, paste0("signac_res_coembed_", k, "_", isFilter, "_", weight_reduc_cca, ".RData")))
+```
+
+
