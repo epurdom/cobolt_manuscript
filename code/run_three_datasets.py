@@ -51,7 +51,7 @@ multi_dt = load_merged_remapped(10000000,
 # ==================================== quality filtering
 # ====================================
 if is_filter in ["P", "M"]:
-    barcode_dir = "../../multiomics_clustering/rcode/20210204_method_comparison/quality_cells"
+    barcode_dir = "../output/quality_cells"
     for omic in ["rna", "atac"]:
         cells = pd.read_csv(
             os.path.join(barcode_dir, cell_file[omic]),
