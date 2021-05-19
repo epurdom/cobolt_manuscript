@@ -23,7 +23,7 @@ library(reshape2)
 ```
 
 ```{r}
-dir = "../output/20210204_all_figures/"
+dir = "../output/all_figures/"
 ```
 
 # Train test split
