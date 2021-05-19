@@ -1,0 +1,330 @@
+---
+title: "Method Comparison"
+author: "Boying Gong"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r, message=FALSE}
+library(mclust)
+library(clusterExperiment)
+library(uwot)
+library(Seurat)
+library(RANN)
+library(clusterExperiment)
+library(reshape2)
+library(ggplot2)
+library(RANN)
+library(xgboost)
+```
+
+```{r}
+adjust = "xgboost"
+n_dim = 10
+k = 10
+train_prop = 0.2
+
+print(paste(train_prop, n_dim, adjust))
+
+pred_xgboost = function(pred_var, depend_var, new_data){
+    pred = list()
+    for (i in 1:(n_dim-1)){
+      fit <- xgboost(
+        data = as.matrix(pred_var), 
+        label = as.numeric(depend_var[, i]), 
+        max_depth = 3, 
+        eta = 0.8,
+        nrounds = 100, 
+        objective = "reg:squarederror",
+        verbose = 0
+      )
+      pred[[i]] = predict(fit, as.matrix(new_data))
+    }
+    pred = as.data.frame(do.call("cbind", pred))
+    rownames(pred) = rownames(new_data)
+    return(pred)
+}
+```
+
+
+# KNN
+
+```{r}
+get_knn_prop = function(rna_data, atac_data, K = 500){
+    barcode_shared = intersect(rownames(rna_data), rownames(atac_data))
+    rna_data = rna_data[barcode_shared, ]
+    atac_data = atac_data[barcode_shared, ]
+    knn_res = nn2(atac_data, rna_data, k = K)$nn.idx
+    which_knn = sapply(1:nrow(knn_res), function(x) {
+      tmp = which(knn_res[x, ] == x) 
+      if (length(tmp) > 0) return(tmp)
+      else return(-1)
+    })
+    return(list(
+      x = (1:K) / length(barcode_shared),
+      y = cumsum(  table( factor(which_knn, levels = c(-1, 1:K)) )[-1]  ) / length(barcode_shared)
+    ))
+}
+```
+
+## mRNA as query
+
+```{r}
+res_list = list()
+# ====================== signac ====================== 
+output_dir = "../../output/method_comparison/"
+load(file.path(output_dir, paste0("signac_res_", k, ".RData")))
+tmp = lapply(rownames(seurat_cca_emb), function(x) strsplit(x, "_")[[1]])
+barcode = sapply(tmp, function(x) paste(x[1], x[2], sep = "_"))
+data_type = sapply(tmp, function(x) {
+  if (x[3] == "reference") return("rna")
+  else return("atac")
+})
+rna_data = seurat_cca_emb[data_type == "rna", ]
+rna_barcode = barcode[data_type == "rna"]
+rownames(rna_data) = rna_barcode
+atac_data = seurat_cca_emb[data_type == "atac", ]
+atac_barcode = barcode[data_type == "atac"]
+rownames(atac_data) = atac_barcode
+signc_res = get_knn_prop(rna_data, atac_data)
+res_list = c(res_list, list(data.frame(
+  x = signc_res$x,
+  y = signc_res$y,
+  method = "Signac",
+  dim = k,
+  k = 1:length(signc_res$x)
+)))
+# ====================== liger ====================== 
+output_dir = "../../output/method_comparison/"
+load(file.path(output_dir, paste0("liger_res_", k, ".RData")))
+barcode = sapply(rownames(H_norm), function(x) strsplit(x, "-")[[1]][1])
+data_type = sapply(rownames(H_norm), function(x) {
+  tmp = strsplit(x, "-")[[1]]
+  if (length(tmp) == 1) return("rna")
+  else return("atac")
+})
+rna_data = H_norm[data_type == "rna", ]
+rna_barcode = barcode[data_type == "rna"]
+rownames(rna_data) = rna_barcode
+atac_data = H_norm[data_type == "atac", ]
+atac_barcode = barcode[data_type == "atac"]
+rownames(atac_data) = atac_barcode
+res = get_knn_prop(rna_data, atac_data)
+res_list = c(res_list, list(data.frame(
+  x = res$x,
+  y = res$y,
+  method = "LIGER",
+  dim = k,
+  k = 1:length(res$x)
+)))
+# ====================== Ours-peak ====================== 
+
+test_barcode <- read.table(
+  file.path("../../output/train_test_split/peak", train_prop, "test_barcode.txt"), 
+  stringsAsFactors = FALSE)$V1
+train_barcode <- read.table(
+  file.path("../../output/train_test_split/peak", train_prop, "train_barcode.txt"), 
+  stringsAsFactors = FALSE)$V1
+dat_dir <- file.path("../../output/train_test_split/peak", train_prop)
+sub_dir = ""
+n_latent = 10
+
+f_df = data.frame(f = list.files(path = file.path(dat_dir, sub_dir), 
+                                 pattern = "*latent.csv"),
+                  stringsAsFactors = FALSE)
+f_df$eval = sapply(f_df$f, function(x) 
+  strsplit(gsub("_(test|train)_latent.csv", "", x), "30_2_[0-9]+")[[1]][2])
+f_df$data = sapply(f_df$f, function(x) strsplit(x, "_")[[1]][9])
+
+latent_df_list = c()
+for (ev in c("True_False", "False_True", "True_True")){
+  for (dt in c("train")){
+    f_name = f_df$f[with(f_df, (eval == ev) & (data == dt))]
+    latent_df = read.csv(file.path(dat_dir, sub_dir, f_name), header = FALSE)
+    barcode = read.csv(
+      file.path(dat_dir, sub_dir, gsub("latent", "barcode", f_name)), 
+      stringsAsFactors = FALSE, header = FALSE)$V1
+    rownames(latent_df) = gsub("_(rna|atac)", "", barcode)
+    latent_df$is_testing = sapply(barcode, function(x) grepl("_(rna|atac)", x))
+    latent_df_list[[ev]] = latent_df
+  }
+}
+
+test_mrna = latent_df_list[["True_False"]]
+test_mrna = test_mrna[test_mrna$is_testing, -ncol(test_mrna)]
+test_atac = latent_df_list[["False_True"]][rownames(test_mrna), 1:n_latent]
+
+train_joint = latent_df_list[["True_True"]][, 1:n_latent]
+train_mrna = latent_df_list[["True_False"]][rownames(train_joint), 1:n_latent]
+train_atac = latent_df_list[["False_True"]][rownames(train_joint), 1:n_latent]
+
+
+if (adjust == "xgboost"){
+  test_mrna = pred_xgboost(
+    pred_var=train_mrna, depend_var=train_joint, new_data=test_mrna)
+  test_atac = pred_xgboost(
+    pred_var=train_atac, depend_var=train_joint, new_data=test_atac)
+}
+
+res = get_knn_prop(test_mrna, test_atac)
+res_list = c(res_list, list(data.frame(
+  x = res$x,
+  y = res$y,
+  method = "Cobolt-peak",
+  dim = k,
+  k = 1:length(res$x)
+)))
+# ====================== Ours-gene ====================== 
+test_barcode <- read.table(
+  file.path("../../output/train_test_split/gene", train_prop, "test_barcode.txt"), 
+  stringsAsFactors = FALSE)$V1
+train_barcode <- read.table(
+  file.path("../../output/train_test_split/gene", train_prop, "train_barcode.txt"), 
+  stringsAsFactors = FALSE)$V1
+dat_dir <- file.path("../../output/train_test_split/gene", train_prop)
+sub_dir = ""
+n_latent = 10
+
+f_df = data.frame(f = list.files(path = file.path(dat_dir, sub_dir), 
+                                 pattern = "*latent.csv"),
+                  stringsAsFactors = FALSE)
+f_df$eval = sapply(f_df$f, function(x) 
+  strsplit(gsub("_(test|train)_latent.csv", "", x), "30_2_[0-9]+")[[1]][2])
+f_df$data = sapply(f_df$f, function(x) strsplit(x, "_")[[1]][9])
+
+latent_df_list = c()
+for (ev in c("True_False", "False_True", "True_True")){
+  for (dt in c("train")){
+    f_name = f_df$f[with(f_df, (eval == ev) & (data == dt))]
+    latent_df = read.csv(file.path(dat_dir, sub_dir, f_name), header = FALSE)
+    barcode = read.csv(
+      file.path(dat_dir, sub_dir, gsub("latent", "barcode", f_name)), 
+      stringsAsFactors = FALSE, header = FALSE)$V1
+    rownames(latent_df) = gsub("_(rna|atac)", "", barcode)
+    latent_df$is_testing = sapply(barcode, function(x) grepl("_(rna|atac)", x))
+    latent_df_list[[ev]] = latent_df
+  }
+}
+
+test_mrna = latent_df_list[["True_False"]]
+test_mrna = test_mrna[test_mrna$is_testing, -ncol(test_mrna)]
+test_atac = latent_df_list[["False_True"]][rownames(test_mrna), 1:n_latent]
+
+train_joint = latent_df_list[["True_True"]][, 1:n_latent]
+train_mrna = latent_df_list[["True_False"]][rownames(train_joint), 1:n_latent]
+train_atac = latent_df_list[["False_True"]][rownames(train_joint), 1:n_latent]
+
+
+if (adjust == "xgboost"){
+  test_mrna = pred_xgboost(
+    pred_var=train_mrna, depend_var=train_joint, new_data=test_mrna)
+  test_atac = pred_xgboost(
+    pred_var=train_atac, depend_var=train_joint, new_data=test_atac)
+}
+
+res = get_knn_prop(test_mrna, test_atac)
+res_list = c(res_list, list(data.frame(
+  x = res$x,
+  y = res$y,
+  method = "Cobolt-gene",
+  dim = k,
+  k = 1:length(res$x)
+)))
+
+# ====================== Ours remapped ====================== 
+test_barcode <- read.table(
+  file.path("../../output/train_test_split/remapped/", train_prop, "test_barcode.txt"), 
+  stringsAsFactors = FALSE)$V1
+train_barcode <- read.table(
+  file.path("../../output/train_test_split/remapped/", train_prop, "train_barcode.txt"), 
+  stringsAsFactors = FALSE)$V1
+dat_dir <- file.path("../lda/output/train_test_split/remapped", train_prop)
+sub_dir = ""
+n_latent = 10
+
+f_df = data.frame(f = list.files(path = file.path(dat_dir, sub_dir), 
+                                 pattern = "*latent.csv"),
+                  stringsAsFactors = FALSE)
+f_df$eval = sapply(f_df$f, function(x) 
+  strsplit(gsub("_(test|train)_latent.csv", "", x), "30_2_[0-9]+")[[1]][2])
+f_df$data = sapply(f_df$f, function(x) strsplit(x, "_")[[1]][9])
+
+latent_df_list = c()
+for (ev in c("True_False", "False_True", "True_True")){
+  for (dt in c("train")){
+    f_name = f_df$f[with(f_df, (eval == ev) & (data == dt))]
+    latent_df = read.csv(file.path(dat_dir, sub_dir, f_name), header = FALSE)
+    barcode = read.csv(
+      file.path(dat_dir, sub_dir, gsub("latent", "barcode", f_name)), 
+      stringsAsFactors = FALSE, header = FALSE)$V1
+    rownames(latent_df) = gsub("_(rna|atac)", "", barcode)
+    latent_df$is_testing = sapply(barcode, function(x) grepl("_(rna|atac)", x))
+    latent_df_list[[ev]] = latent_df
+  }
+}
+
+test_mrna = latent_df_list[["True_False"]]
+test_mrna = test_mrna[test_mrna$is_testing, -ncol(test_mrna)]
+test_atac = latent_df_list[["False_True"]][rownames(test_mrna), 1:n_latent]
+
+train_joint = latent_df_list[["True_True"]][, 1:n_latent]
+train_mrna = latent_df_list[["True_False"]][rownames(train_joint), 1:n_latent]
+train_atac = latent_df_list[["False_True"]][rownames(train_joint), 1:n_latent]
+
+
+if (adjust == "xgboost"){
+  test_mrna = pred_xgboost(
+    pred_var=train_mrna, depend_var=train_joint, new_data=test_mrna)
+  test_atac = pred_xgboost(
+    pred_var=train_atac, depend_var=train_joint, new_data=test_atac)
+}
+
+res = get_knn_prop(test_mrna, test_atac)
+res_list = c(res_list, list(data.frame(
+  x = res$x,
+  y = res$y,
+  method = "Cobolt-remapped",
+  dim = k,
+  k = 1:length(res$x)
+)))
+
+```
+
+```{r, fig.width=5, fig.height=3.5, out.width='49%'}
+plot_res = function(res_df){
+  p1 = ggplot(res_df[res_df$x <= 0.05, ]) + geom_line(aes(x, y, color = method)) + 
+    scale_color_manual(values = clusterExperiment::bigPalette) +
+    xlab("Neighbor Proportion") +
+    ylab("Sample Proportion") +
+    theme_classic()
+  p2 = ggplot(res_df) + geom_line(aes(k, y, color = method)) + 
+    scale_color_manual(values = clusterExperiment::bigPalette) +
+    xlab("K") +
+    ylab("Sample Proportion") +
+    theme_classic()
+  return(list(p1, p2))
+}
+# ====================== Summary ====================== 
+res_df = do.call("rbind", res_list)
+res_df$dim = factor(res_df$dim)
+mrna_full = plot_res(res_df)
+print(mrna_full[[1]])
+print(mrna_full[[2]])
+mrna_plot = plot_res(res_df[res_df$method != "Cobolt-remapped", ])
+print(mrna_plot[[1]])
+print(mrna_plot[[2]])
+mrna_supp = plot_res(res_df[res_df$method %in% c("Cobolt-remapped", "Cobolt-peak"), ])
+print(mrna_supp[[1]])
+print(mrna_supp[[2]])
+```
+
+```{r}
+save(mrna_plot, mrna_supp, 
+     file = paste0("../../output/all_figures/test_train_", train_prop, ".RData"))
+```
